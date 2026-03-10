@@ -1,0 +1,8 @@
+{
+  "name": "VANTAGE - Procurement & Financial Shield",
+  "description": "B2B procurement automation system with AI-driven invoice validation (The Sentinel) and real-time financial integrity controls.",
+  "requestFramePermissions": [
+    "camera",
+    "geolocation"
+  ]
+}
