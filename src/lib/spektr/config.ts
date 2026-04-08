@@ -1,4 +1,4 @@
-const DEFAULT_SPEKTR_WORKSPACE = "SPEKTR Flow Studio";
+const DEFAULT_SPEKTR_WORKSPACE = "MERMAID Flow Studio";
 
 export const getSpektrWorkspaceName = () => {
   return import.meta.env.VITE_SPEKTR_WORKSPACE?.trim() || DEFAULT_SPEKTR_WORKSPACE;

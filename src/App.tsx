@@ -45,10 +45,10 @@ const DEFAULT_MERMAID_CODE = `graph TD
     A[New Diagram] --> B[Edit Me]`;
 
 const DEFAULT_C4_CONTEXT_CODE = `C4Context
-    title Contexto del sistema de SPEKTR Flow Studio
+    title Contexto del sistema de MERMAID Flow Studio
     Person(architect, "Arquitecto", "Diseña y revisa diagramas")
-    System(flow_studio, "SPEKTR Flow Studio", "Editor web para Mermaid, BPMN y C4")
-    System_Ext(spektr_module, "SPEKTR", "Módulo aislado para generar y analizar diagramas")
+    System(flow_studio, "MERMAID Flow Studio", "Editor web para Mermaid, BPMN y C4")
+    System_Ext(spektr_module, "SPEKTR", "Motor IA para generar y analizar diagramas")
     System_Ext(local_workspace, "Workspace local", "Persistencia local del navegador")
 
     Rel(architect, flow_studio, "Diseña y valida")
@@ -62,7 +62,7 @@ const MERMAID_SAMPLE_CODE = `graph TD
     D --> B`;
 
 const ENTERPRISE_SAMPLE_CODE = `graph TD
-    A[Carga de Factura] --> B[SPEKTR IA]
+    A[Carga de Factura] --> B[Motor IA SPEKTR]
     B --> C[CONSULTA: vantage_bom]
     B --> D[CONSULTA: vantage_projects]
     C --> E{¿Técnicamente OK?}
@@ -700,7 +700,7 @@ function App() {
                 }}
               >
                 <Bot className="h-4 w-4" />
-                SPEKTR
+                SPEKTR IA
               </Button>
               
               <Button 
@@ -882,9 +882,9 @@ function App() {
       {/* Status Bar */}
       <footer className="flex flex-col gap-2 bg-gradient-to-r from-[hsl(var(--brand-start))] via-[hsl(var(--brand-middle))] to-[hsl(var(--brand-end))] px-4 py-2 text-xs text-white sm:flex-row sm:items-center sm:justify-between">
         <div className="flex flex-wrap items-center gap-2">
-          <SpektrLogo mode="icon" className="h-5 w-auto shrink-0" title="SPEKTR" />
+          <SpektrLogo mode="icon" className="h-5 w-auto shrink-0" title="MERMAID" />
           <span className="rounded-full bg-white/12 px-2.5 py-1 font-semibold tracking-[0.14em]">
-            SYSTEM: SPEKTR FLOW ONLINE
+            SYSTEM: MERMAID FLOW ONLINE
           </span>
           <span className="rounded-full bg-white/12 px-2.5 py-1 text-white/90">
             ACTIVE_SLOT: {activeDiagram.title}
@@ -892,7 +892,7 @@ function App() {
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <span className="rounded-full bg-white/12 px-2.5 py-1 text-white/90">
-            ESTADO: {showSpektrPanel ? "SPEKTR ACTIVO" : "SPEKTR EN ESPERA"}
+            IA: {showSpektrPanel ? "SPEKTR ACTIVO" : "SPEKTR EN ESPERA"}
           </span>
           <span className="rounded-full bg-white/12 px-2.5 py-1 text-white/90">
             BUILD: {buildLabel}
