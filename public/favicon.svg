@@ -1,0 +1,21 @@
+<svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet" shape-rendering="geometricPrecision">
+  <defs>
+    <linearGradient id="favBg" x1="8" y1="8" x2="56" y2="56" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#312E81"/>
+      <stop offset="0.55" stop-color="#0F766E"/>
+      <stop offset="1" stop-color="#0891B2"/>
+    </linearGradient>
+    <linearGradient id="favStroke" x1="14" y1="18" x2="50" y2="42" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#A5B4FC"/>
+      <stop offset="0.5" stop-color="#5EEAD4"/>
+      <stop offset="1" stop-color="#CFFAFE"/>
+    </linearGradient>
+  </defs>
+  <rect x="4" y="4" width="56" height="56" rx="18" fill="url(#favBg)"/>
+  <path d="M16 40L24.5 20L32 39L40 23L48 40" stroke="url(#favStroke)" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>
+  <circle cx="16" cy="40" r="4" fill="#C7D2FE"/>
+  <circle cx="24.5" cy="20" r="5" fill="#A5F3FC"/>
+  <circle cx="32" cy="39" r="4" fill="#5EEAD4"/>
+  <circle cx="40" cy="23" r="5" fill="#67E8F9"/>
+  <circle cx="48" cy="40" r="4" fill="#99F6E4"/>
+</svg>
