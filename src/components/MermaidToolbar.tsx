@@ -15,7 +15,10 @@ interface MermaidToolbarProps {
 
 export function MermaidToolbar({ onInsert }: MermaidToolbarProps) {
   return (
-    <div className="absolute top-4 left-4 flex flex-col gap-2 bg-white p-1.5 rounded-lg shadow-md border border-gray-200 z-10 transition-opacity hover:opacity-100 opacity-80">
+    <div
+      data-mermaid-control
+      className="absolute top-4 left-4 z-10 flex flex-col gap-2 rounded-lg border border-gray-200 bg-white p-1.5 opacity-80 shadow-md transition-opacity hover:opacity-100"
+    >
       <div className="flex flex-col gap-1">
         <span className="text-[10px] font-semibold text-gray-400 px-1 mb-1">NODES</span>
         <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => onInsert('\n    NewNode[New Node]')}>

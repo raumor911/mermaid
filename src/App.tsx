@@ -1,14 +1,5 @@
-import { useState, useEffect, useRef } from "react";
-import { AnimatePresence, LayoutGroup, motion } from "framer-motion";
-import mermaid from "mermaid";
-import { select, type Selection } from "d3-selection";
-import {
-  zoom,
-  zoomIdentity,
-  type D3ZoomEvent,
-  type ZoomBehavior,
-  type ZoomTransform,
-} from "d3-zoom";
+import { useState, useEffect, useRef, useMemo, useCallback, lazy, Suspense } from "react";
+import { AnimatePresence, LayoutGroup, Reorder, motion, useDragControls } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { 
   Copy, 
@@ -21,17 +12,22 @@ import {
   History,
   Bot,
   Plus,
-  X
+  X,
+  GripVertical
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { AISentinelPanel } from "./components/AISentinelPanel";
 import { VersionHistory } from "./components/VersionHistory";
 import { BpmnRenderer } from "./components/BpmnRenderer";
-import { MermaidToolbar } from "./components/MermaidToolbar";
-import { RauviaLogo } from "./components/branding/RauviaLogo";
+import { MermaidCanvas, type MermaidCanvasHandle } from "./components/MermaidCanvas";
+import { SpektrLogo } from "./components/branding/SpektrLogo";
 import { WorkspacePanelHeader } from "./components/workspace/WorkspacePanelHeader";
+import { getSpektrBuildLabel, getSpektrWorkspaceName } from "@/lib/spektr/config";
 
-type DiagramType = "mermaid" | "bpmn";
+const LazySpektrPanel = lazy(() =>
+  import("./components/SpektrPanel").then((module) => ({ default: module.SpektrPanel })),
+);
+
+type DiagramType = "mermaid" | "bpmn" | "c4context";
 
 type Diagram = {
   id: number;
@@ -48,6 +44,17 @@ type PersistedSlots = {
 const DEFAULT_MERMAID_CODE = `graph TD
     A[New Diagram] --> B[Edit Me]`;
 
+const DEFAULT_C4_CONTEXT_CODE = `C4Context
+    title Contexto del sistema de SPEKTR Flow Studio
+    Person(architect, "Arquitecto", "Diseña y revisa diagramas")
+    System(flow_studio, "SPEKTR Flow Studio", "Editor web para Mermaid, BPMN y C4")
+    System_Ext(spektr_module, "SPEKTR", "Módulo aislado para generar y analizar diagramas")
+    System_Ext(local_workspace, "Workspace local", "Persistencia local del navegador")
+
+    Rel(architect, flow_studio, "Diseña y valida")
+    Rel(flow_studio, spektr_module, "Solicita soporte")
+    Rel(flow_studio, local_workspace, "Guarda slots")`;
+
 const MERMAID_SAMPLE_CODE = `graph TD
     A[Start] --> B{Is it working?}
     B -- Yes --> C[Great!]
@@ -55,7 +62,7 @@ const MERMAID_SAMPLE_CODE = `graph TD
     D --> B`;
 
 const ENTERPRISE_SAMPLE_CODE = `graph TD
-    A[Carga de Factura] --> B[Sentinel IA]
+    A[Carga de Factura] --> B[SPEKTR IA]
     B --> C[CONSULTA: vantage_bom]
     B --> D[CONSULTA: vantage_projects]
     C --> E{¿Técnicamente OK?}
@@ -72,6 +79,13 @@ const createMermaidDiagram = (id: number, title = `DIAGRAM ${id}`): Diagram => (
   title,
   code: DEFAULT_MERMAID_CODE,
   type: "mermaid",
+});
+
+const createC4ContextDiagram = (id: number, title = `C4 ${id}`): Diagram => ({
+  id,
+  title,
+  code: DEFAULT_C4_CONTEXT_CODE,
+  type: "c4context",
 });
 
 const createBpmnDiagram = (id: number, title = `BPMN ${id}`): Diagram => ({
@@ -143,23 +157,7 @@ const DEFAULT_DIAGRAMS: Diagram[] = [
   createBpmnDiagram(6, "BPMN 1"),
 ];
 
-const MERMAID_RENDER_CONFIG = {
-  startOnLoad: true,
-  theme: 'default',
-  securityLevel: 'loose',
-};
-
-const MERMAID_EXPORT_CONFIG = {
-  ...MERMAID_RENDER_CONFIG,
-  flowchart: {
-    htmlLabels: false,
-  },
-};
-
-const STORAGE_KEY = "rauvia_mermaid_slots";
-const MERMAID_MIN_SCALE = 0.05;
-const MERMAID_MAX_SCALE = 8;
-const MERMAID_ZOOM_STEP = 1.2;
+const STORAGE_KEY = "spektr_mermaid_slots";
 
 const loadPersistedSlots = () => {
   try {
@@ -196,7 +194,12 @@ const normalizePersistedDiagrams = (value: unknown): Diagram[] => {
       return acc;
     }
 
-    const type: DiagramType = candidate.type === "bpmn" ? "bpmn" : "mermaid";
+    const type: DiagramType =
+      candidate.type === "bpmn"
+        ? "bpmn"
+        : candidate.type === "c4context"
+          ? "c4context"
+          : "mermaid";
 
     acc.push({
       id: candidate.id,
@@ -214,6 +217,29 @@ const normalizePersistedDiagrams = (value: unknown): Diagram[] => {
 const getNextDiagramId = (diagrams: Diagram[]) =>
   diagrams.length > 0 ? Math.max(...diagrams.map((diagram) => diagram.id)) + 1 : 1;
 
+const areNumberArraysEqual = (left: number[], right: number[]) =>
+  left.length === right.length && left.every((value, index) => value === right[index]);
+
+const getDiagramTypeBadge = (type?: DiagramType) => {
+  if (type === "bpmn") return "BPMN";
+  if (type === "c4context") return "C4";
+  return null;
+};
+
+const getEditorMeta = (type?: DiagramType) => {
+  if (type === "bpmn") return "Archivo XML BPMN";
+  if (type === "c4context") return "Sintaxis Mermaid C4Context";
+  return "Sintaxis Mermaid";
+};
+
+const getPreviewMeta = (diagram: Diagram) => {
+  if (diagram.type === "c4context") {
+    return `${diagram.title} · Mermaid C4Context`;
+  }
+
+  return diagram.title;
+};
+
 const resolveActiveTab = (diagrams: Diagram[], persistedActiveTab?: number) => {
   if (
     typeof persistedActiveTab === "number" &&
@@ -225,33 +251,162 @@ const resolveActiveTab = (diagrams: Diagram[], persistedActiveTab?: number) => {
   return diagrams[0]?.id ?? 1;
 };
 
-const serializeSvgForExport = (
-  svgElement: SVGSVGElement,
-  bounds?: { minX: number; minY: number; width: number; height: number } | null
-) => {
-  const clonedSvg = svgElement.cloneNode(true) as SVGSVGElement;
-
-  if (!clonedSvg.getAttribute("xmlns")) {
-    clonedSvg.setAttribute("xmlns", "http://www.w3.org/2000/svg");
-  }
-
-  if (!clonedSvg.getAttribute("xmlns:xlink")) {
-    clonedSvg.setAttribute("xmlns:xlink", "http://www.w3.org/1999/xlink");
-  }
-
-  if (bounds) {
-    clonedSvg.setAttribute("viewBox", `${bounds.minX} ${bounds.minY} ${bounds.width} ${bounds.height}`);
-    clonedSvg.setAttribute("width", `${bounds.width}`);
-    clonedSvg.setAttribute("height", `${bounds.height}`);
-    clonedSvg.setAttribute("preserveAspectRatio", "xMidYMid meet");
-  }
-
-  clonedSvg.style.removeProperty("max-width");
-  clonedSvg.style.removeProperty("max-height");
-
-  const serializer = new XMLSerializer();
-  return `<?xml version="1.0" encoding="UTF-8"?>\n${serializer.serializeToString(clonedSvg)}`;
+type DiagramTabItemProps = {
+  diagram: Diagram;
+  isActive: boolean;
+  isEditing: boolean;
+  editingTitle: string;
+  onSelect: (diagramId: number, isEditing: boolean) => void;
+  onStartRenaming: (diagram: Diagram) => void;
+  onChangeEditingTitle: (title: string) => void;
+  onCommitRename: (diagramId: number) => void;
+  onTabTitleKeyDown: (event: React.KeyboardEvent<HTMLInputElement>, id: number) => void;
+  onCloseTab: (id: number, event: React.MouseEvent) => void;
+  tabTitleInputRef: React.RefObject<HTMLInputElement>;
+  onDragStart: () => void;
+  onDragEnd: () => void;
 };
+
+function DiagramTabItem({
+  diagram,
+  isActive,
+  isEditing,
+  editingTitle,
+  onSelect,
+  onStartRenaming,
+  onChangeEditingTitle,
+  onCommitRename,
+  onTabTitleKeyDown,
+  onCloseTab,
+  tabTitleInputRef,
+  onDragStart,
+  onDragEnd,
+}: DiagramTabItemProps) {
+  const dragControls = useDragControls();
+
+  return (
+    <Reorder.Item
+      value={diagram.id}
+      dragPropagation={false}
+      layout="position"
+      initial={{ opacity: 0, y: 8, scale: 0.98 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      exit={{ opacity: 0, y: -8, scale: 0.96 }}
+      transition={{ duration: 0.18, ease: "easeOut" }}
+      dragControls={dragControls}
+      dragListener={false}
+      whileDrag={{
+        scale: 1.02,
+        zIndex: 30,
+        boxShadow: "0 12px 32px rgba(15, 23, 42, 0.18)",
+      }}
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
+      onClick={() => onSelect(diagram.id, isEditing)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onSelect(diagram.id, isEditing);
+        }
+      }}
+      onDoubleClick={() => onStartRenaming(diagram)}
+      role="tab"
+      aria-selected={isActive}
+      aria-label={`Abrir ${diagram.title}`}
+      tabIndex={0}
+      className={cn(
+        "group relative flex min-w-[156px] touch-pan-x items-center gap-2 rounded-xl border px-3 py-2.5 text-sm font-semibold tracking-[0.12em] transition-colors",
+        isActive
+          ? "border-border bg-white text-primary shadow-sm"
+          : "border-transparent bg-muted/65 text-muted-foreground hover:bg-muted hover:text-foreground"
+      )}
+    >
+      {isActive && (
+        <motion.span
+          layoutId="active-tab-indicator"
+          className="absolute inset-x-3 top-0 h-0.5 rounded-full bg-gradient-to-r from-[hsl(var(--brand-start))] via-[hsl(var(--brand-middle))] to-[hsl(var(--brand-end))]"
+          transition={{ type: "spring", stiffness: 400, damping: 35 }}
+        />
+      )}
+
+      <button
+        type="button"
+        aria-label={`Reordenar ${diagram.title}`}
+        title="Arrastrar para reordenar"
+        disabled={isEditing}
+        onClick={(event) => event.stopPropagation()}
+        onPointerDown={(event) => {
+          event.stopPropagation();
+
+          if (isEditing || event.button !== 0) return;
+
+          dragControls.start(event, { snapToCursor: false });
+        }}
+        className={cn(
+          "relative z-10 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors",
+          isEditing
+            ? "cursor-not-allowed opacity-40"
+            : "cursor-grab hover:bg-muted hover:text-foreground active:cursor-grabbing"
+        )}
+      >
+        <GripVertical className="h-3.5 w-3.5" />
+      </button>
+
+      <div className="relative z-10 flex min-w-0 flex-1 items-center gap-2">
+        <AnimatePresence initial={false} mode="wait">
+          {isEditing ? (
+            <motion.input
+              key={`input-${diagram.id}`}
+              ref={tabTitleInputRef}
+              value={editingTitle}
+              onChange={(event) => onChangeEditingTitle(event.target.value)}
+              onBlur={() => onCommitRename(diagram.id)}
+              onKeyDown={(event) => onTabTitleKeyDown(event, diagram.id)}
+              onClick={(event) => event.stopPropagation()}
+              onPointerDown={(event) => event.stopPropagation()}
+              className="h-8 flex-1 rounded-lg border border-primary/30 bg-white px-2.5 text-xs font-semibold uppercase tracking-[0.12em] text-foreground outline-none ring-0"
+              initial={{ opacity: 0, width: 96 }}
+              animate={{ opacity: 1, width: "100%" }}
+              exit={{ opacity: 0, width: 96 }}
+              transition={{ duration: 0.14, ease: "easeOut" }}
+            />
+          ) : (
+            <motion.span
+              key={`label-${diagram.id}`}
+              className="truncate"
+              initial={{ opacity: 0, y: 4 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -4 }}
+              transition={{ duration: 0.12, ease: "easeOut" }}
+              title="Doble clic para renombrar"
+            >
+              {diagram.title}
+            </motion.span>
+          )}
+        </AnimatePresence>
+
+        {getDiagramTypeBadge(diagram.type) && (
+          <span className="shrink-0 rounded-full bg-secondary px-2 py-0.5 text-[10px] font-bold tracking-[0.12em] text-primary">
+            {getDiagramTypeBadge(diagram.type)}
+          </span>
+        )}
+      </div>
+
+      <button
+        onClick={(event) => onCloseTab(diagram.id, event)}
+        onPointerDown={(event) => event.stopPropagation()}
+        aria-label={`Cerrar ${diagram.title}`}
+        className={cn(
+          "relative z-10 ml-1 rounded-full p-1 opacity-0 transition-opacity hover:bg-muted group-hover:opacity-100",
+          isActive ? "text-primary" : "text-muted-foreground",
+          isEditing && "opacity-100"
+        )}
+      >
+        <X className="h-3.5 w-3.5" />
+      </button>
+    </Reorder.Item>
+  );
+}
 
 function App() {
   const [diagrams, setDiagrams] = useState<Diagram[]>(() => {
@@ -266,198 +421,33 @@ function App() {
   });
 
   const [showHistory, setShowHistory] = useState(false);
-  const [showAIChat, setShowAIChat] = useState(false);
+  const [showSpektrPanel, setShowSpektrPanel] = useState(false);
+  const [hasOpenedSpektrPanel, setHasOpenedSpektrPanel] = useState(false);
   const [editingTabId, setEditingTabId] = useState<number | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
-  const [mermaidZoomScale, setMermaidZoomScale] = useState(1);
-  const currentProject = "RAUVIA Flow Studio";
-  const mermaidViewportRef = useRef<HTMLDivElement | null>(null);
-  const mermaidDiagramRef = useRef<HTMLDivElement | null>(null);
-  const mermaidCanvasRef = useRef<HTMLDivElement | null>(null);
-  const zoomBehaviorRef = useRef<ZoomBehavior<HTMLDivElement, unknown> | null>(null);
-  const zoomSelectionRef = useRef<Selection<HTMLDivElement, unknown, null, undefined> | null>(null);
-  const zoomTransformRef = useRef<ZoomTransform>(zoomIdentity);
-  const hasManualViewportRef = useRef(false);
+  const [tabOrder, setTabOrder] = useState<number[]>(() => {
+    const persistedSlots = loadPersistedSlots();
+    return normalizePersistedDiagrams(persistedSlots?.diagrams).map((diagram) => diagram.id);
+  });
+  const currentProject = getSpektrWorkspaceName();
+  const buildLabel = getSpektrBuildLabel();
+  const mermaidCanvasHandleRef = useRef<MermaidCanvasHandle | null>(null);
   const tabTitleInputRef = useRef<HTMLInputElement | null>(null);
+  const tabOrderRef = useRef(tabOrder);
 
-  const measureMermaidSvg = (svgElement: SVGSVGElement) => {
-    const viewBox = svgElement.viewBox.baseVal;
-    let minX = viewBox?.x ?? 0;
-    let minY = viewBox?.y ?? 0;
-    let maxX = minX + (viewBox?.width || 0);
-    let maxY = minY + (viewBox?.height || 0);
-
-    try {
-      const bbox = svgElement.getBBox();
-
-      if (bbox.width && bbox.height) {
-        const bboxPadding = 24;
-        minX = Math.min(minX, bbox.x - bboxPadding);
-        minY = Math.min(minY, bbox.y - bboxPadding);
-        maxX = Math.max(maxX, bbox.x + bbox.width + bboxPadding);
-        maxY = Math.max(maxY, bbox.y + bbox.height + bboxPadding);
-      }
-    } catch (error) {
-      console.warn("Failed to measure Mermaid SVG via getBBox", error);
-    }
-
-    let width = maxX - minX;
-    let height = maxY - minY;
-
-    if (!width || !height) {
-      const rect = svgElement.getBoundingClientRect();
-      width = rect.width;
-      height = rect.height;
-      minX = 0;
-      minY = 0;
-    }
-
-    if (!width || !height) return null;
-
-    return {
-      minX,
-      minY,
-      width,
-      height,
-    };
-  };
-
-  const renderStandaloneMermaidSvg = async (diagramCode: string) => {
-    const exportHost = document.createElement("div");
-    exportHost.style.position = "fixed";
-    exportHost.style.left = "-10000px";
-    exportHost.style.top = "0";
-    exportHost.style.visibility = "hidden";
-    exportHost.style.pointerEvents = "none";
-
-    document.body.appendChild(exportHost);
-
-    try {
-      mermaid.initialize(MERMAID_EXPORT_CONFIG);
-
-      const exportId = `mermaid-export-${activeTab}-${Date.now()}`;
-      const { svg } = await mermaid.render(exportId, diagramCode);
-
-      exportHost.innerHTML = svg;
-
-      const exportSvgElement = exportHost.querySelector("svg");
-
-      if (!exportSvgElement) {
-        throw new Error("Mermaid export did not produce an SVG element.");
-      }
-
-      const exportBounds = measureMermaidSvg(exportSvgElement);
-      return serializeSvgForExport(exportSvgElement, exportBounds);
-    } finally {
-      mermaid.initialize(MERMAID_RENDER_CONFIG);
-      document.body.removeChild(exportHost);
-    }
-  };
-
-  const activeDiagram = diagrams.find((diagram) => diagram.id === activeTab) || diagrams[0];
-
-  const applyMermaidTransform = (transform: ZoomTransform) => {
-    const canvas = mermaidCanvasRef.current;
-
-    if (!canvas) return;
-
-    canvas.style.transform = `translate(${transform.x}px, ${transform.y}px) scale(${transform.k})`;
-    canvas.style.transformOrigin = "0 0";
-  };
-
-  const normalizeWheelDelta = (delta: number, deltaMode: number) => {
-    if (deltaMode === WheelEvent.DOM_DELTA_LINE) return delta * 16;
-    if (deltaMode === WheelEvent.DOM_DELTA_PAGE) {
-      return delta * (mermaidViewportRef.current?.clientHeight || window.innerHeight);
-    }
-
-    return delta;
-  };
-
-  const fitMermaidDiagram = () => {
-    const viewport = mermaidViewportRef.current;
-    const diagramHost = mermaidDiagramRef.current;
-    const zoomBehavior = zoomBehaviorRef.current;
-    const zoomSelection = zoomSelectionRef.current;
-    const svgElement = diagramHost?.querySelector("svg");
-
-    if (!viewport || !svgElement || !zoomBehavior || !zoomSelection) return;
-
-    const bounds = measureMermaidSvg(svgElement);
-
-    if (!bounds) return;
-
-    const { minX, minY, width: diagramWidth, height: diagramHeight } = bounds;
-
-    svgElement.style.display = "block";
-    svgElement.style.width = `${diagramWidth}px`;
-    svgElement.style.height = `${diagramHeight}px`;
-    svgElement.style.maxWidth = "none";
-    svgElement.style.maxHeight = "none";
-    svgElement.setAttribute("viewBox", `${minX} ${minY} ${diagramWidth} ${diagramHeight}`);
-    svgElement.setAttribute("preserveAspectRatio", "xMidYMid meet");
-
-    const padding = Math.max(Math.min(Math.min(viewport.clientWidth, viewport.clientHeight) * 0.08, 64), 24);
-    const availableWidth = Math.max(viewport.clientWidth - padding, 1);
-    const availableHeight = Math.max(viewport.clientHeight - padding, 1);
-    const fitScale = Math.min(availableWidth / diagramWidth, availableHeight / diagramHeight);
-    const safeScale = Math.min(Math.max(fitScale, MERMAID_MIN_SCALE), MERMAID_MAX_SCALE);
-    const positionX = (viewport.clientWidth - diagramWidth * safeScale) / 2;
-    const positionY = (viewport.clientHeight - diagramHeight * safeScale) / 2;
-
-    zoomSelection.call(
-      zoomBehavior.transform,
-      zoomIdentity.translate(positionX, positionY).scale(safeScale)
-    );
-  };
-
-  const centerMermaidDiagramAtScale = (scale: number) => {
-    const viewport = mermaidViewportRef.current;
-    const diagramHost = mermaidDiagramRef.current;
-    const zoomBehavior = zoomBehaviorRef.current;
-    const zoomSelection = zoomSelectionRef.current;
-    const svgElement = diagramHost?.querySelector("svg");
-
-    if (!viewport || !svgElement || !zoomBehavior || !zoomSelection) return;
-
-    const bounds = measureMermaidSvg(svgElement);
-
-    if (!bounds) return;
-
-    const safeScale = Math.min(Math.max(scale, MERMAID_MIN_SCALE), MERMAID_MAX_SCALE);
-    const positionX = (viewport.clientWidth - bounds.width * safeScale) / 2;
-    const positionY = (viewport.clientHeight - bounds.height * safeScale) / 2;
-
-    zoomSelection.call(
-      zoomBehavior.transform,
-      zoomIdentity.translate(positionX, positionY).scale(safeScale)
-    );
-  };
-
-  const zoomMermaidBy = (factor: number) => {
-    const zoomBehavior = zoomBehaviorRef.current;
-    const zoomSelection = zoomSelectionRef.current;
-    const viewport = mermaidViewportRef.current;
-
-    if (!zoomBehavior || !zoomSelection || !viewport) return;
-
-    hasManualViewportRef.current = true;
-    zoomSelection.call(
-      zoomBehavior.scaleBy,
-      factor,
-      [viewport.clientWidth / 2, viewport.clientHeight / 2]
-    );
-  };
-
-  const resetMermaidDiagramView = () => {
-    hasManualViewportRef.current = true;
-    centerMermaidDiagramAtScale(1);
-  };
-
-  const handleFitMermaidDiagram = () => {
-    hasManualViewportRef.current = false;
-    fitMermaidDiagram();
-  };
+  const activeDiagram = useMemo(
+    () => diagrams.find((diagram) => diagram.id === activeTab) || diagrams[0],
+    [diagrams, activeTab]
+  );
+  const diagramsById = useMemo(
+    () => new Map(diagrams.map((diagram) => [diagram.id, diagram])),
+    [diagrams]
+  );
+  const orderedDiagrams = useMemo(
+    () => tabOrder.map((diagramId) => diagramsById.get(diagramId)).filter(Boolean) as Diagram[],
+    [tabOrder, diagramsById]
+  );
+  const isSpektrGenerationAvailable = activeDiagram.type !== "bpmn";
 
   // Save state to localStorage whenever diagrams or activeTab changes
   useEffect(() => {
@@ -481,6 +471,19 @@ function App() {
   }, [diagrams, activeTab]);
 
   useEffect(() => {
+    setTabOrder((currentOrder) => {
+      const diagramIds = diagrams.map((diagram) => diagram.id);
+      const nextOrder = [
+        ...currentOrder.filter((diagramId) => diagramIds.includes(diagramId)),
+        ...diagramIds.filter((diagramId) => !currentOrder.includes(diagramId)),
+      ];
+
+      tabOrderRef.current = nextOrder;
+      return areNumberArraysEqual(currentOrder, nextOrder) ? currentOrder : nextOrder;
+    });
+  }, [diagrams]);
+
+  useEffect(() => {
     if (editingTabId === null) return;
 
     tabTitleInputRef.current?.focus();
@@ -488,136 +491,10 @@ function App() {
   }, [editingTabId]);
 
   useEffect(() => {
-    mermaid.initialize(MERMAID_RENDER_CONFIG);
-  }, []);
-
-  useEffect(() => {
-    if (activeDiagram.type && activeDiagram.type !== "mermaid") return;
-
-    const viewport = mermaidViewportRef.current;
-    const canvas = mermaidCanvasRef.current;
-
-    if (!viewport || !canvas) return;
-
-    const viewportSelection = select(viewport);
-    const zoomBehavior = zoom<HTMLDivElement, unknown>()
-      .scaleExtent([MERMAID_MIN_SCALE, MERMAID_MAX_SCALE])
-      .filter((event) => {
-        if (event.type === "wheel" || event.type === "dblclick") return false;
-        if (event.type === "mousedown") return event.button === 0;
-        return true;
-      })
-      .touchable(() => {
-        if (typeof navigator === "undefined") return false;
-        if (navigator.maxTouchPoints > 0) return true;
-        return typeof window !== "undefined" && "ontouchstart" in window;
-      })
-      .on("zoom", (event: D3ZoomEvent<HTMLDivElement, unknown>) => {
-        zoomTransformRef.current = event.transform;
-        setMermaidZoomScale(event.transform.k);
-        applyMermaidTransform(event.transform);
-
-        if (event.sourceEvent) {
-          hasManualViewportRef.current = true;
-        }
-      });
-
-    viewportSelection.call(zoomBehavior);
-    viewportSelection.on("dblclick.zoom", null);
-
-    const handleWheel = (event: WheelEvent) => {
-      const behavior = zoomBehaviorRef.current;
-      const selection = zoomSelectionRef.current;
-
-      if (!behavior || !selection) return;
-
-      event.preventDefault();
-      event.stopPropagation();
-
-      const rect = viewport.getBoundingClientRect();
-      const pointer: [number, number] = [event.clientX - rect.left, event.clientY - rect.top];
-
-      if (event.ctrlKey || event.metaKey) {
-        const deltaY = normalizeWheelDelta(event.deltaY, event.deltaMode);
-        const zoomFactor = Math.exp(-deltaY * 0.0025);
-        selection.call(behavior.scaleBy, zoomFactor, pointer);
-        return;
-      }
-
-      const deltaX = normalizeWheelDelta(event.deltaX, event.deltaMode);
-      const deltaY = normalizeWheelDelta(event.deltaY, event.deltaMode);
-      const currentScale = zoomTransformRef.current.k || 1;
-
-      if (!deltaX && !deltaY) return;
-
-      selection.call(
-        behavior.translateBy,
-        -deltaX / currentScale,
-        -deltaY / currentScale
-      );
-    };
-
-    viewport.addEventListener("wheel", handleWheel, { passive: false });
-
-    zoomBehaviorRef.current = zoomBehavior;
-    zoomSelectionRef.current = viewportSelection;
-    zoomTransformRef.current = zoomIdentity;
-    setMermaidZoomScale(1);
-    applyMermaidTransform(zoomIdentity);
-
-    return () => {
-      viewport.removeEventListener("wheel", handleWheel);
-      viewportSelection.on(".zoom", null);
-      zoomBehaviorRef.current = null;
-      zoomSelectionRef.current = null;
-      zoomTransformRef.current = zoomIdentity;
-      setMermaidZoomScale(1);
-    };
-  }, [activeDiagram.type]);
-
-  useEffect(() => {
-    // Only render mermaid if active diagram is mermaid type (or undefined for backward compatibility)
-    if (activeDiagram.type && activeDiagram.type !== 'mermaid') return;
-
-    const renderDiagram = async () => {
-      try {
-        const element = mermaidDiagramRef.current;
-        if (element) {
-          hasManualViewportRef.current = false;
-          element.innerHTML = '';
-          const { svg } = await mermaid.render(`mermaid-svg-${activeTab}`, activeDiagram.code);
-          element.innerHTML = svg;
-          window.requestAnimationFrame(() => {
-            window.requestAnimationFrame(fitMermaidDiagram);
-          });
-        }
-      } catch (error) {
-        console.error("Mermaid syntax error:", error);
-        // Keep the old diagram or show error state if desired
-      }
-    };
-
-    // Debounce rendering
-    const timeoutId = setTimeout(renderDiagram, 500);
-    return () => clearTimeout(timeoutId);
-  }, [activeDiagram.code, activeTab]);
-
-  useEffect(() => {
-    if (activeDiagram.type && activeDiagram.type !== 'mermaid') return;
-
-    const viewport = mermaidViewportRef.current;
-
-    if (!viewport || typeof ResizeObserver === "undefined") return;
-
-    const resizeObserver = new ResizeObserver(() => {
-      if (hasManualViewportRef.current) return;
-      window.requestAnimationFrame(fitMermaidDiagram);
-    });
-
-    resizeObserver.observe(viewport);
-
-    return () => resizeObserver.disconnect();
-  }, [activeDiagram.type, activeTab]);
+    if (showSpektrPanel) {
+      setHasOpenedSpektrPanel(true);
+    }
+  }, [showSpektrPanel]);
 
   const handleCodeChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const newCode = e.target.value;
@@ -631,6 +508,13 @@ function App() {
   const handleAddDiagram = () => {
     const newId = getNextDiagramId(diagrams);
     const newDiagram = createMermaidDiagram(newId);
+    setDiagrams((prev) => [...prev, newDiagram]);
+    setActiveTab(newId);
+  };
+
+  const handleAddC4Context = () => {
+    const newId = getNextDiagramId(diagrams);
+    const newDiagram = createC4ContextDiagram(newId);
     setDiagrams((prev) => [...prev, newDiagram]);
     setActiveTab(newId);
   };
@@ -657,28 +541,62 @@ function App() {
     setActiveTab(newId);
   };
 
-  const handleCodeUpdate = (newCode: string) => {
-    setDiagrams((prev) => prev.map((diagram) => (diagram.id === activeTab ? { ...diagram, code: newCode } : diagram)));
-  };
+  const handleReorderDiagrams = useCallback((nextOrder: number[]) => {
+    tabOrderRef.current = nextOrder;
+    setTabOrder(nextOrder);
+  }, []);
 
-  const handleInsertMermaid = (snippet: string) => {
+  const commitDiagramOrder = useCallback((nextOrder: number[]) => {
+    setDiagrams((prev) => {
+      const diagramsMap = new Map(prev.map((diagram) => [diagram.id, diagram]));
+      const nextDiagrams = nextOrder
+        .map((diagramId) => diagramsMap.get(diagramId))
+        .filter(Boolean) as Diagram[];
+
+      return nextDiagrams.length === prev.length && nextDiagrams.every((diagram, index) => diagram === prev[index])
+        ? prev
+        : nextDiagrams;
+    });
+  }, []);
+
+  const handleCodeUpdate = useCallback((newCode: string) => {
+    setDiagrams((prev) => prev.map((diagram) => (diagram.id === activeTab ? { ...diagram, code: newCode } : diagram)));
+  }, [activeTab]);
+
+  const handleInsertMermaid = useCallback((snippet: string) => {
     setDiagrams((prev) =>
       prev.map((diagram) =>
         diagram.id === activeTab ? { ...diagram, code: diagram.code + "\n" + snippet } : diagram
       )
     );
-  };
+  }, [activeTab]);
+
+  const handleCancelRename = useCallback(() => {
+    setEditingTabId(null);
+    setEditingTitle("");
+  }, []);
+
+  const handleSelectTab = useCallback((diagramId: number, isEditing: boolean) => {
+    setActiveTab(diagramId);
+    if (!isEditing) {
+      handleCancelRename();
+    }
+  }, [handleCancelRename]);
+
+  const handleChangeEditingTitle = useCallback((title: string) => {
+    setEditingTitle(title);
+  }, []);
 
   const handleExportSVG = async () => {
-    const element = mermaidDiagramRef.current;
-    const svgElement = element?.querySelector("svg");
+    const svgElement = mermaidCanvasHandleRef.current?.getSvgElement();
 
     if (svgElement) {
       try {
-        const svgBounds = measureMermaidSvg(svgElement);
         const svgData = activeDiagram.type === 'bpmn'
-          ? serializeSvgForExport(svgElement, svgBounds)
-          : await renderStandaloneMermaidSvg(activeDiagram.code);
+          ? svgElement.outerHTML
+          : await mermaidCanvasHandleRef.current?.exportStandaloneSvg();
+
+        if (!svgData) return;
 
         const blob = new Blob([svgData], { type: "image/svg+xml;charset=utf-8" });
         const url = URL.createObjectURL(blob);
@@ -696,13 +614,13 @@ function App() {
     }
   };
 
-  const handleStartRenaming = (diagram: Diagram) => {
+  const handleStartRenaming = useCallback((diagram: Diagram) => {
     setActiveTab(diagram.id);
     setEditingTabId(diagram.id);
     setEditingTitle(diagram.title);
-  };
+  }, []);
 
-  const handleCommitRename = (id: number) => {
+  const handleCommitRename = useCallback((id: number) => {
     const diagram = diagrams.find((item) => item.id === id);
     if (!diagram) {
       setEditingTabId(null);
@@ -717,12 +635,7 @@ function App() {
     );
     setEditingTabId(null);
     setEditingTitle("");
-  };
-
-  const handleCancelRename = () => {
-    setEditingTabId(null);
-    setEditingTitle("");
-  };
+  }, [diagrams, editingTitle]);
 
   const handleTabTitleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>, id: number) => {
     if (event.key === "Enter") {
@@ -766,9 +679,9 @@ function App() {
       <header className="relative z-20 border-b border-border/80 bg-white/90 px-4 py-3 shadow-sm backdrop-blur lg:px-6">
         <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
           <div className="flex min-w-0 flex-1 items-center">
-            <RauviaLogo
+            <SpektrLogo
               className="h-10 shrink-0 sm:h-11"
-              title="RAUVIA Flow Studio"
+              title={currentProject}
             />
           </div>
 
@@ -779,12 +692,15 @@ function App() {
                 size="sm" 
                 className={cn(
                   "h-9 gap-2 border-border/80 bg-white/85 text-foreground",
-                  showAIChat && "border-primary/30 bg-primary/10 text-primary"
+                  showSpektrPanel && "border-primary/30 bg-primary/10 text-primary"
                 )}
-                onClick={() => setShowAIChat(!showAIChat)}
+                onClick={() => {
+                  setHasOpenedSpektrPanel(true);
+                  setShowSpektrPanel(!showSpektrPanel);
+                }}
               >
                 <Bot className="h-4 w-4" />
-                AI Sentinel
+                SPEKTR
               </Button>
               
               <Button 
@@ -828,110 +744,40 @@ function App() {
       {/* Tabs */}
       <div className="z-10 flex items-center gap-3 overflow-x-auto border-b border-border/80 bg-white/80 px-3 py-2 backdrop-blur sm:px-4">
         <LayoutGroup id="diagram-tabs">
-          <motion.div layout className="flex items-center gap-2">
+          <Reorder.Group
+            axis="x"
+            values={tabOrder}
+            onReorder={handleReorderDiagrams}
+            role="tablist"
+            aria-label="Pestañas de diagramas"
+            className="flex items-center gap-2"
+          >
             <AnimatePresence initial={false}>
-              {diagrams.map((diagram) => {
+              {orderedDiagrams.map((diagram) => {
                 const isActive = activeTab === diagram.id;
                 const isEditing = editingTabId === diagram.id;
 
                 return (
-                  <motion.div
+                  <DiagramTabItem
                     key={diagram.id}
-                    layout
-                    initial={{ opacity: 0, y: 8, scale: 0.98 }}
-                    animate={{ opacity: 1, y: 0, scale: 1 }}
-                    exit={{ opacity: 0, y: -8, scale: 0.96 }}
-                    transition={{ duration: 0.18, ease: "easeOut" }}
-                    onClick={() => {
-                      setActiveTab(diagram.id);
-                      if (!isEditing) {
-                        handleCancelRename();
-                      }
-                    }}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" || event.key === " ") {
-                        event.preventDefault();
-                        setActiveTab(diagram.id);
-                        if (!isEditing) {
-                          handleCancelRename();
-                        }
-                      }
-                    }}
-                    onDoubleClick={() => handleStartRenaming(diagram)}
-                    role="tab"
-                    aria-selected={isActive}
-                    aria-label={`Abrir ${diagram.title}`}
-                    tabIndex={0}
-                    className={cn(
-                      "group relative flex min-w-[156px] cursor-pointer items-center gap-2 rounded-xl border px-3 py-2.5 text-sm font-semibold tracking-[0.12em] transition-colors",
-                      isActive
-                        ? "border-border bg-white text-primary shadow-sm"
-                        : "border-transparent bg-muted/65 text-muted-foreground hover:bg-muted hover:text-foreground"
-                    )}
-                  >
-                    {isActive && (
-                      <motion.span
-                        layoutId="active-tab-indicator"
-                        className="absolute inset-x-3 top-0 h-0.5 rounded-full bg-gradient-to-r from-[hsl(var(--brand-start))] via-[hsl(var(--brand-middle))] to-[hsl(var(--brand-end))]"
-                        transition={{ type: "spring", stiffness: 400, damping: 35 }}
-                      />
-                    )}
-
-                    <div className="relative z-10 flex min-w-0 flex-1 items-center gap-2">
-                      <AnimatePresence initial={false} mode="wait">
-                        {isEditing ? (
-                          <motion.input
-                            key={`input-${diagram.id}`}
-                            ref={tabTitleInputRef}
-                            value={editingTitle}
-                            onChange={(event) => setEditingTitle(event.target.value)}
-                            onBlur={() => handleCommitRename(diagram.id)}
-                            onKeyDown={(event) => handleTabTitleKeyDown(event, diagram.id)}
-                            onClick={(event) => event.stopPropagation()}
-                            className="h-8 flex-1 rounded-lg border border-primary/30 bg-white px-2.5 text-xs font-semibold uppercase tracking-[0.12em] text-foreground outline-none ring-0"
-                            initial={{ opacity: 0, width: 96 }}
-                            animate={{ opacity: 1, width: "100%" }}
-                            exit={{ opacity: 0, width: 96 }}
-                            transition={{ duration: 0.14, ease: "easeOut" }}
-                          />
-                        ) : (
-                          <motion.span
-                            key={`label-${diagram.id}`}
-                            className="truncate"
-                            initial={{ opacity: 0, y: 4 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            exit={{ opacity: 0, y: -4 }}
-                            transition={{ duration: 0.12, ease: "easeOut" }}
-                            title="Doble clic para renombrar"
-                          >
-                            {diagram.title}
-                          </motion.span>
-                        )}
-                      </AnimatePresence>
-
-                      {diagram.type === "bpmn" && (
-                        <span className="shrink-0 rounded-full bg-secondary px-2 py-0.5 text-[10px] font-bold tracking-[0.12em] text-primary">
-                          BPMN
-                        </span>
-                      )}
-                    </div>
-                    
-                    <button
-                      onClick={(e) => handleCloseTab(diagram.id, e)}
-                      aria-label={`Cerrar ${diagram.title}`}
-                      className={cn(
-                        "relative z-10 ml-1 rounded-full p-1 opacity-0 transition-opacity hover:bg-muted group-hover:opacity-100",
-                        isActive ? "text-primary" : "text-muted-foreground",
-                        isEditing && "opacity-100"
-                      )}
-                    >
-                      <X className="h-3.5 w-3.5" />
-                    </button>
-                  </motion.div>
+                    diagram={diagram}
+                    isActive={isActive}
+                    isEditing={isEditing}
+                    editingTitle={editingTitle}
+                    onSelect={handleSelectTab}
+                    onStartRenaming={handleStartRenaming}
+                    onChangeEditingTitle={handleChangeEditingTitle}
+                    onCommitRename={handleCommitRename}
+                    onTabTitleKeyDown={handleTabTitleKeyDown}
+                    onCloseTab={handleCloseTab}
+                    tabTitleInputRef={tabTitleInputRef}
+                    onDragStart={handleCancelRename}
+                    onDragEnd={() => commitDiagramOrder(tabOrderRef.current)}
+                  />
                 );
               })}
             </AnimatePresence>
-          </motion.div>
+          </Reorder.Group>
         </LayoutGroup>
         
         <div className="mx-1 h-6 w-px bg-border/80" />
@@ -940,6 +786,10 @@ function App() {
           <Button variant="ghost" size="sm" onClick={handleAddDiagram} className="h-8 gap-1.5 text-xs text-foreground">
             <Plus className="h-3.5 w-3.5" />
             Mermaid
+          </Button>
+          <Button variant="ghost" size="sm" onClick={handleAddC4Context} className="h-8 gap-1.5 text-xs text-foreground">
+            <Plus className="h-3.5 w-3.5" />
+            C4 Context
           </Button>
           <Button variant="ghost" size="sm" onClick={handleAddBpmn} className="h-8 gap-1.5 text-xs text-foreground">
             <Plus className="h-3.5 w-3.5" />
@@ -956,7 +806,7 @@ function App() {
             icon={FileCode2}
             eyebrow="Editor"
             title={activeDiagram.title}
-            meta={activeDiagram.type === "bpmn" ? "Archivo XML BPMN" : "Sintaxis Mermaid"}
+            meta={getEditorMeta(activeDiagram.type)}
             action={
               <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-destructive" aria-label="Eliminar diagrama">
                 <Trash2 className="h-4 w-4" />
@@ -980,7 +830,7 @@ function App() {
             icon={Eye}
             eyebrow="Preview"
             title="Visual Output"
-            meta={activeDiagram.title}
+            meta={getPreviewMeta(activeDiagram)}
             action={
               <div className="flex items-center gap-2 text-xs text-muted-foreground">
                 <span className="hidden sm:inline">Salida vectorial</span>
@@ -989,102 +839,37 @@ function App() {
             }
           />
           <div className="flex-1 p-3 sm:p-4">
-            <div ref={mermaidViewportRef} className="mermaid-overscroll-guard relative flex h-full min-h-[320px] overflow-hidden rounded-xl border border-border/80 bg-white shadow-sm">
+            <div className="mermaid-overscroll-guard relative flex h-full min-h-[320px] overflow-hidden rounded-xl border border-border/80 bg-white shadow-sm">
               {activeDiagram.type === 'bpmn' ? (
                 <BpmnRenderer 
                   xml={activeDiagram.code} 
                   onXmlChange={handleCodeUpdate}
                 />
               ) : (
-                <>
-                  <MermaidToolbar onInsert={handleInsertMermaid} />
-                  <div className="mermaid-overscroll-guard h-full w-full overflow-hidden touch-none select-none">
-                    <div className="absolute right-3 top-3 z-10 flex flex-wrap items-center gap-2 rounded-xl border border-border/80 bg-white/95 p-2 shadow-sm backdrop-blur">
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="icon"
-                        className="h-8 w-8 border-border/80"
-                        aria-label="Reducir zoom"
-                        disabled={mermaidZoomScale <= MERMAID_MIN_SCALE + 0.001}
-                        onPointerDown={(event) => event.stopPropagation()}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          zoomMermaidBy(1 / MERMAID_ZOOM_STEP);
-                        }}
-                      >
-                        -
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="icon"
-                        className="h-8 w-8 border-border/80"
-                        aria-label="Aumentar zoom"
-                        disabled={mermaidZoomScale >= MERMAID_MAX_SCALE - 0.001}
-                        onPointerDown={(event) => event.stopPropagation()}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          zoomMermaidBy(MERMAID_ZOOM_STEP);
-                        }}
-                      >
-                        +
-                      </Button>
-                      <div className="min-w-[4.75rem] rounded-lg border border-border/80 bg-muted/50 px-2.5 py-1 text-center text-xs font-semibold text-foreground">
-                        {Math.round(mermaidZoomScale * 100)}%
-                      </div>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        className="h-8 border-border/80 px-3 text-xs"
-                        onPointerDown={(event) => event.stopPropagation()}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          resetMermaidDiagramView();
-                        }}
-                      >
-                        Reset
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        className="h-8 border-border/80 px-3 text-xs"
-                        onPointerDown={(event) => event.stopPropagation()}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          handleFitMermaidDiagram();
-                        }}
-                      >
-                        Fit
-                      </Button>
-                    </div>
-                    <div
-                      ref={mermaidCanvasRef}
-                      className="relative inline-block will-change-transform"
-                    >
-                      <div
-                        ref={mermaidDiagramRef}
-                        id={`mermaid-diagram-${activeTab}`}
-                        className="inline-block"
-                      >
-                        {/* Mermaid diagram renders here */}
-                      </div>
-                    </div>
-                  </div>
-                </>
+                <MermaidCanvas
+                  ref={mermaidCanvasHandleRef}
+                  diagramId={activeDiagram.id}
+                  diagramType={activeDiagram.type}
+                  code={activeDiagram.code}
+                  onInsert={handleInsertMermaid}
+                />
               )}
             </div>
           </div>
           
-          <AISentinelPanel 
-            currentCode={activeDiagram.code} 
-            currentProject={currentProject}
-            onCodeUpdate={handleCodeUpdate}
-            isOpen={showAIChat}
-            onClose={() => setShowAIChat(false)}
-          />
+          {hasOpenedSpektrPanel && (
+            <Suspense fallback={null}>
+              <LazySpektrPanel
+                currentCode={activeDiagram.code}
+                currentProject={currentProject}
+                diagramType={activeDiagram.type || "mermaid"}
+                isGenerationAvailable={isSpektrGenerationAvailable}
+                onCodeUpdate={handleCodeUpdate}
+                isOpen={showSpektrPanel}
+                onClose={() => setShowSpektrPanel(false)}
+              />
+            </Suspense>
+          )}
         </div>
 
         {/* History Panel */}
@@ -1097,9 +882,9 @@ function App() {
       {/* Status Bar */}
       <footer className="flex flex-col gap-2 bg-gradient-to-r from-[hsl(var(--brand-start))] via-[hsl(var(--brand-middle))] to-[hsl(var(--brand-end))] px-4 py-2 text-xs text-white sm:flex-row sm:items-center sm:justify-between">
         <div className="flex flex-wrap items-center gap-2">
-          <RauviaLogo mode="icon" className="h-5 w-auto shrink-0" title="RAUVIA" />
+          <SpektrLogo mode="icon" className="h-5 w-auto shrink-0" title="SPEKTR" />
           <span className="rounded-full bg-white/12 px-2.5 py-1 font-semibold tracking-[0.14em]">
-            SYSTEM: RAUVIA FLOW ENABLED
+            SYSTEM: SPEKTR FLOW ONLINE
           </span>
           <span className="rounded-full bg-white/12 px-2.5 py-1 text-white/90">
             ACTIVE_SLOT: {activeDiagram.title}
@@ -1107,10 +892,10 @@ function App() {
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <span className="rounded-full bg-white/12 px-2.5 py-1 text-white/90">
-            BUFFER: {diagrams.length}/∞
+            ESTADO: {showSpektrPanel ? "SPEKTR ACTIVO" : "SPEKTR EN ESPERA"}
           </span>
           <span className="rounded-full bg-white/12 px-2.5 py-1 text-white/90">
-            BUILD: 2026.04.07
+            BUILD: {buildLabel}
           </span>
         </div>
       </footer>

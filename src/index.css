@@ -97,4 +97,10 @@
     -webkit-user-select: none;
     user-select: none;
   }
+
+  .mermaid-gesture-surface {
+    touch-action: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
 }
