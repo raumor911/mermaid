@@ -282,7 +282,7 @@ export const handler = async (req: ServerlessRequest, res: ServerlessResponse) =
     const ai = new GoogleGenAI({ apiKey: apiKeyConfig.apiKey });
     const result = await ai.models.generateContent({
       model: modelName,
-      contents: buildSpektrPrompt(payload.mode, payload)
+      contents: [{ role: "user", parts: [{ text: buildSpektrPrompt(payload.mode, payload) }] }]
     });
 
     const content = result.text?.trim() ?? "";
