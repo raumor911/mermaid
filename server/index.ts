@@ -1,3 +1,5 @@
+import dotenv from 'dotenv';
+dotenv.config();
 import express from 'express';
 import { handler as spektrHandler } from './spektr.ts';
 

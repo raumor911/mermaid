@@ -1,4 +1,4 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { GoogleGenAI } from "@google/genai";
 import { buildSpektrPrompt } from "../src/lib/spektr/prompts";
 import type {
   SpektrApiErrorResponse,
@@ -8,13 +8,14 @@ import type {
   SpektrMode,
 } from "../src/lib/spektr/types";
 
-const DEFAULT_SPEKTR_MODEL = "gemini-2.5-flash";
+const DEFAULT_SPEKTR_MODEL = "gemini-1.5-flash";
 const MAX_PROMPT_LENGTH = 4_000;
 const MAX_CURRENT_CODE_LENGTH = 120_000;
 const MAX_PROJECT_LENGTH = 120;
 const MAX_BODY_LENGTH = 150_000;
-const SERVER_API_KEY_ENV_NAMES = ["SPEKTR_API_KEY", "GEMINI_API_KEY"] as const;
+const SERVER_API_KEY_ENV_NAMES = ["SPEKTR_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"] as const;
 const LEGACY_API_KEY_ENV_NAMES = ["VITE_GEMINI_API_KEY"] as const;
+
 const serverEnv =
   (globalThis as typeof globalThis & {
     process?: {
@@ -113,14 +114,10 @@ const toPublicHttpError = (error: unknown, modelName: string) => {
     return error;
   }
 
-  const providerMessage = error instanceof Error ? error.message.trim() : "";
+  const providerMessage = error instanceof Error ? error.message.trim() : String(error);
 
   if (!providerMessage) {
     return new HttpError(500, "SPEKTR no pudo completar la solicitud.");
-  }
-
-  if (/SPEKTR no devolvió/i.test(providerMessage)) {
-    return new HttpError(502, providerMessage);
   }
 
   if (
@@ -152,14 +149,7 @@ const toPublicHttpError = (error: unknown, modelName: string) => {
     );
   }
 
-  if (/timeout|timed out|deadline|unavailable|overloaded|internal error|503/i.test(providerMessage)) {
-    return new HttpError(
-      502,
-      "El proveedor de SPEKTR no respondió correctamente. Intenta nuevamente.",
-    );
-  }
-
-  return new HttpError(502, "SPEKTR no pudo completar la solicitud.");
+  return new HttpError(502, `Error de SPEKTR: ${providerMessage.slice(0, 100)}`);
 };
 
 const parseRequestBody = (body: unknown) => {
@@ -288,11 +278,13 @@ export default async function handler(req: ServerlessRequest, res: ServerlessRes
     modelName = getModelName();
     apiKeySource = apiKeyConfig.source;
 
-    const client = new GoogleGenerativeAI(apiKeyConfig.apiKey);
-    const model = client.getGenerativeModel({ model: modelName });
-    const result = await model.generateContent(buildSpektrPrompt(payload.mode, payload));
-    const response = await result.response;
-    const content = response.text().trim();
+    const ai = new GoogleGenAI({ apiKey: apiKeyConfig.apiKey });
+    const result = await ai.models.generateContent({
+      model: modelName,
+      contents: buildSpektrPrompt(payload.mode, payload)
+    });
+
+    const content = result.text.trim();
 
     if (!content) {
       throw new Error(
