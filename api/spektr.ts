@@ -75,13 +75,14 @@ export default async function handler(req: any, res: any) {
     }
 
     if (!result) {
-      // Si todo falla, intentamos listar qué modelos sí están disponibles para darte una solución real
+      // DIAGNÓSTICO CRÍTICO: Si llegamos aquí, vamos a preguntar a Google qué modelos SÍ podemos ver.
       try {
-        const availableModels = await genAI.getGenerativeModel({ model: "gemini-1.5-flash" }).listModels?.();
-        console.log("Modelos disponibles:", availableModels);
-      } catch (dist) {}
-      
-      throw lastError || new Error("No se pudo conectar con ningún modelo de Gemini.");
+        const available = await genAI.listModels();
+        const modelNames = available.models?.map(m => m.name) || [];
+        throw new Error(`Modelos disponibles para tu llave: ${modelNames.join(", ") || "NINGUNO"}. Por favor activa 'Generative Language API' en tu consola de Google.`);
+      } catch (listError: any) {
+        throw new Error(`Error fatal: Tu llave no puede ni siquiera listar modelos. Motivo: ${listError.message || lastError.message}`);
+      }
     }
     const response = await result.response;
     const text = response.text().trim();
