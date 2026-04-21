@@ -1,5 +1,5 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import { buildSpektrPrompt } from "../src/lib/spektr/prompts";
+import { buildSpektrPrompt } from "../src/lib/spektr/prompts.ts";
 import type {
   SpektrApiErrorResponse,
   SpektrApiRequest,
@@ -263,7 +263,7 @@ const sendJson = (
   res.status(statusCode).json(body);
 };
 
-export default async function handler(req: ServerlessRequest, res: ServerlessResponse) {
+export const handler = async (req: ServerlessRequest, res: ServerlessResponse) => {
   res.setHeader("Cache-Control", "no-store");
   res.setHeader("Content-Type", "application/json; charset=utf-8");
 
@@ -336,4 +336,4 @@ export default async function handler(req: ServerlessRequest, res: ServerlessRes
 
     return sendJson(res, statusCode, { error: message });
   }
-}
+};

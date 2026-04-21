@@ -22,6 +22,7 @@ import { MermaidCanvas, type MermaidCanvasHandle } from "./components/MermaidCan
 import { SpektrLogo } from "./components/branding/SpektrLogo";
 import { WorkspacePanelHeader } from "./components/workspace/WorkspacePanelHeader";
 import { getSpektrBuildLabel, getSpektrWorkspaceName } from "@/lib/spektr/config";
+import { sanitizeMermaidCode } from "@/lib/mermaidSanitizer";
 
 const LazySpektrPanel = lazy(() =>
   import("./components/SpektrPanel").then((module) => ({ default: module.SpektrPanel })),
@@ -409,6 +410,10 @@ function DiagramTabItem({
 }
 
 function App() {
+  const [editorFeedback, setEditorFeedback] = useState<{
+    tone: "info" | "success";
+    message: string;
+  } | null>(null);
   const [diagrams, setDiagrams] = useState<Diagram[]>(() => {
     const persistedSlots = loadPersistedSlots();
     return normalizePersistedDiagrams(persistedSlots?.diagrams);
@@ -496,8 +501,13 @@ function App() {
     }
   }, [showSpektrPanel]);
 
+  useEffect(() => {
+    setEditorFeedback(null);
+  }, [activeTab]);
+
   const handleCodeChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const newCode = e.target.value;
+    setEditorFeedback(null);
     setDiagrams((prev) =>
       prev.map((diagram) =>
         diagram.id === activeTab ? { ...diagram, code: newCode, type: diagram.type || "mermaid" } : diagram
@@ -560,16 +570,48 @@ function App() {
   }, []);
 
   const handleCodeUpdate = useCallback((newCode: string) => {
+    setEditorFeedback(null);
     setDiagrams((prev) => prev.map((diagram) => (diagram.id === activeTab ? { ...diagram, code: newCode } : diagram)));
   }, [activeTab]);
 
   const handleInsertMermaid = useCallback((snippet: string) => {
+    setEditorFeedback(null);
     setDiagrams((prev) =>
       prev.map((diagram) =>
         diagram.id === activeTab ? { ...diagram, code: diagram.code + "\n" + snippet } : diagram
       )
     );
   }, [activeTab]);
+
+  const handleSanitizeActiveDiagram = useCallback(() => {
+    if (!activeDiagram || activeDiagram.type === "bpmn") {
+      setEditorFeedback({
+        tone: "info",
+        message: "BPMN XML se preserva sin sanitización Mermaid.",
+      });
+      return;
+    }
+
+    const result = sanitizeMermaidCode(activeDiagram.code);
+
+    if (!result.changed) {
+      setEditorFeedback({
+        tone: "info",
+        message: "No se detectaron caracteres o patrones incompatibles en el código Mermaid.",
+      });
+      return;
+    }
+
+    setDiagrams((prev) =>
+      prev.map((diagram) =>
+        diagram.id === activeDiagram.id ? { ...diagram, code: result.code } : diagram
+      )
+    );
+    setEditorFeedback({
+      tone: "success",
+      message: `Código Mermaid sanitizado: ${result.appliedRules.join(", ")}.`,
+    });
+  }, [activeDiagram]);
 
   const handleCancelRename = useCallback(() => {
     setEditingTabId(null);
@@ -808,12 +850,41 @@ function App() {
             title={activeDiagram.title}
             meta={getEditorMeta(activeDiagram.type)}
             action={
-              <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-destructive" aria-label="Eliminar diagrama">
-                <Trash2 className="h-4 w-4" />
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-8 text-xs"
+                  onClick={handleSanitizeActiveDiagram}
+                  disabled={activeDiagram.type === "bpmn"}
+                >
+                  Sanitizar Mermaid
+                </Button>
+                <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-destructive" aria-label="Eliminar diagrama">
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              </div>
             }
           />
           <div className="relative flex-1">
+            <div className="border-b border-border/70 bg-white/70 px-4 py-2 text-xs sm:px-5">
+              <span className="text-muted-foreground">
+                {activeDiagram.type === "bpmn"
+                  ? "BPMN XML se preserva; la sanitización Mermaid está desactivada."
+                  : "Normaliza bloques Markdown, tipografía inteligente, flechas Unicode y espacios invisibles antes de renderizar."}
+              </span>
+              {editorFeedback ? (
+                <span
+                  className={cn(
+                    "ml-2 font-medium",
+                    editorFeedback.tone === "success" ? "text-emerald-600" : "text-muted-foreground"
+                  )}
+                >
+                  {editorFeedback.message}
+                </span>
+              ) : null}
+            </div>
             <textarea
               value={activeDiagram.code}
               onChange={handleCodeChange}
