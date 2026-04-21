@@ -1,7 +1,6 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 
-const DEFAULT_SPEKTR_MODEL = "gemini-1.5-flash"; // Intentaremos este primero
-const FALLBACK_MODEL = "gemini-1.5-flash-latest";
+const DEFAULT_SPEKTR_MODEL = "gemini-1.5-flash";
 
 const getEnv = () => {
   return typeof process !== "undefined" ? process.env : {};
@@ -25,68 +24,35 @@ export default async function handler(req: any, res: any) {
   }
 
   const apiKey = getApiKey();
-  let modelName = getModelName();
+  const modelName = getModelName();
 
   if (!apiKey) {
-    return res.status(500).json({ 
-      error: "SPEKTR no detecta API Key en Vercel. Verifica las Environment Variables." 
-    });
+    return res.status(500).json({ error: "SPEKTR: API Key no detectada." });
   }
 
-  // Debug parcial de llave para confirmar actualización en Vercel
-  const keyDebug = `${apiKey.substring(0, 6)}...${apiKey.substring(apiKey.length - 4)}`;
-
   try {
-    const { mode, prompt, currentCode, diagramType } = req.body || {};
+    const { mode, prompt, currentCode } = req.body || {};
 
     const genAI = new GoogleGenerativeAI(apiKey);
-    let model = genAI.getGenerativeModel({ model: modelName });
+    
+    // Forzamos el uso de la API v1 (estable) en lugar de v1beta
+    const model = genAI.getGenerativeModel(
+      { model: modelName },
+      { apiVersion: 'v1' }
+    );
 
     const fullPrompt = `
-      Actúa como SPEKTR, experto en diagramas y arquitectura.
-      Modo: ${mode === 'generate' ? 'Generación de código Mermaid' : 'Análisis de diagrama'}
-      Código actual:
-      \`\`\`
-      ${currentCode || 'graph TD\n  A --> B'}
-      \`\`\`
-      
+      Actúa como SPEKTR.
+      Modo: ${mode === 'generate' ? 'Generación' : 'Análisis'}
+      Código actual: \n${currentCode || ''}
       Solicitud: ${prompt}
       
       Reglas:
       1. Si es generación, responde SOLO con el código Mermaid.
-      2. Si es análisis, responde en español con bullets cortos.
-      3. No uses explicaciones innecesarias.
+      2. No uses bloques markdown.
     `;
 
-    let result;
-    const modelsToTry = [modelName, "gemini-1.5-flash", "gemini-1.5-flash-latest", "gemini-pro", "gemini-1.0-pro"];
-    let lastError;
-
-    for (const modelId of modelsToTry) {
-      try {
-        model = genAI.getGenerativeModel({ model: modelId });
-        result = await model.generateContent(fullPrompt);
-        if (result) break;
-      } catch (e: any) {
-        lastError = e;
-        if (e.message?.includes("404") || e.message?.includes("not found")) {
-          continue; // Probamos el siguiente
-        } else {
-          throw e; // Si es otro error (como 401), paramos
-        }
-      }
-    }
-
-    if (!result) {
-      // DIAGNÓSTICO CRÍTICO: Si llegamos aquí, vamos a preguntar a Google qué modelos SÍ podemos ver.
-      try {
-        const available = await genAI.listModels();
-        const modelNames = available.models?.map(m => m.name) || [];
-        throw new Error(`Modelos disponibles para tu llave: ${modelNames.join(", ") || "NINGUNO"}. Por favor activa 'Generative Language API' en tu consola de Google.`);
-      } catch (listError: any) {
-        throw new Error(`Error fatal: Tu llave no puede ni siquiera listar modelos. Motivo: ${listError.message || lastError.message}`);
-      }
-    }
+    const result = await model.generateContent(fullPrompt);
     const response = await result.response;
     const text = response.text().trim();
 
@@ -100,7 +66,7 @@ export default async function handler(req: any, res: any) {
   } catch (error: any) {
     console.error("Gemini Error:", error);
     return res.status(500).json({ 
-      error: `Error de SPEKTR (Key: ${keyDebug}): ${error.message || 'Error desconocido'}` 
+      error: `Error de SPEKTR (v1): ${error.message || 'Error desconocido'}` 
     });
   }
 }
