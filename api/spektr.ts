@@ -95,9 +95,12 @@ const getApiKeyConfig = () => {
     }
   }
 
+  const checkedKeys = [...SERVER_API_KEY_ENV_NAMES, ...LEGACY_API_KEY_ENV_NAMES];
+  const foundKeys = checkedKeys.filter(k => !!getEnv()[k]);
+
   throw new HttpError(
     500,
-    "SPEKTR no está configurado. Define SPEKTR_API_KEY o GEMINI_API_KEY en el servidor.",
+    `SPEKTR no detecta configuración. Claves intentadas: ${checkedKeys.join(", ")}. Claves encontradas: ${foundKeys.length > 0 ? foundKeys.join(", ") : "NINGUNA"}.`,
   );
 };
 
