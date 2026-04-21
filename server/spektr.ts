@@ -16,12 +16,12 @@ const MAX_BODY_LENGTH = 150_000;
 const SERVER_API_KEY_ENV_NAMES = ["SPEKTR_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"] as const;
 const LEGACY_API_KEY_ENV_NAMES = ["VITE_GEMINI_API_KEY"] as const;
 
-const serverEnv =
-  (globalThis as typeof globalThis & {
-    process?: {
-      env?: Record<string, string | undefined>;
-    };
-  }).process?.env ?? {};
+const getEnv = () => {
+  if (typeof process !== "undefined" && process.env) {
+    return process.env;
+  }
+  return {};
+};
 
 type ApiKeySource =
   | (typeof SERVER_API_KEY_ENV_NAMES)[number]
@@ -62,7 +62,7 @@ const isDiagramType = (value: unknown): value is SpektrDiagramType => {
 };
 
 const readEnvValue = (envName: ApiKeySource) => {
-  return serverEnv[envName]?.trim();
+  return getEnv()[envName]?.trim();
 };
 
 const getApiKeyConfig = () => {
@@ -102,9 +102,10 @@ const getApiKeyConfig = () => {
 };
 
 const getModelName = () => {
+  const env = getEnv();
   return (
-    serverEnv.SPEKTR_MODEL?.trim() ||
-    serverEnv.GEMINI_MODEL?.trim() ||
+    env.SPEKTR_MODEL?.trim() ||
+    env.GEMINI_MODEL?.trim() ||
     DEFAULT_SPEKTR_MODEL
   );
 };
@@ -284,7 +285,7 @@ export const handler = async (req: ServerlessRequest, res: ServerlessResponse) =
       contents: buildSpektrPrompt(payload.mode, payload)
     });
 
-    const content = result.text.trim();
+    const content = result.text?.trim() ?? "";
 
     if (!content) {
       throw new Error(
