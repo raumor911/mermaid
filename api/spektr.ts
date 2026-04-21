@@ -56,16 +56,32 @@ export default async function handler(req: any, res: any) {
     `;
 
     let result;
-    try {
-      result = await model.generateContent(fullPrompt);
-    } catch (modelError: any) {
-      // Si el modelo falla por no encontrarse (404), intentamos con el último disponible
-      if (modelError.message?.includes("404") || modelError.message?.includes("not found")) {
-        model = genAI.getGenerativeModel({ model: FALLBACK_MODEL });
+    const modelsToTry = [modelName, "gemini-1.5-flash", "gemini-1.5-flash-latest", "gemini-pro", "gemini-1.0-pro"];
+    let lastError;
+
+    for (const modelId of modelsToTry) {
+      try {
+        model = genAI.getGenerativeModel({ model: modelId });
         result = await model.generateContent(fullPrompt);
-      } else {
-        throw modelError;
+        if (result) break;
+      } catch (e: any) {
+        lastError = e;
+        if (e.message?.includes("404") || e.message?.includes("not found")) {
+          continue; // Probamos el siguiente
+        } else {
+          throw e; // Si es otro error (como 401), paramos
+        }
       }
+    }
+
+    if (!result) {
+      // Si todo falla, intentamos listar qué modelos sí están disponibles para darte una solución real
+      try {
+        const availableModels = await genAI.getGenerativeModel({ model: "gemini-1.5-flash" }).listModels?.();
+        console.log("Modelos disponibles:", availableModels);
+      } catch (dist) {}
+      
+      throw lastError || new Error("No se pudo conectar con ningún modelo de Gemini.");
     }
     const response = await result.response;
     const text = response.text().trim();
