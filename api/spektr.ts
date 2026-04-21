@@ -65,8 +65,19 @@ export default async function handler(req: any, res: any) {
 
   } catch (error: any) {
     console.error("Gemini Error:", error);
+    
+    // Intento desesperado de diagnóstico: obtener la lista de modelos real
+    let diagnositco = "";
+    try {
+      const resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
+      const data = await resp.json();
+      diagnositco = ` Modelos que Google dice que tienes: ${JSON.stringify(data.models?.map((m: any) => m.name.replace("models/", ""))) || "NINGUNO"}`;
+    } catch (e) {
+      diagnositco = " No se pudo ni siquiera listar los modelos.";
+    }
+
     return res.status(500).json({ 
-      error: `Error de SPEKTR (v1): ${error.message || 'Error desconocido'}` 
+      error: `Error de SPEKTR: ${error.message || 'Error desconocido'}.${diagnositco}` 
     });
   }
 }
