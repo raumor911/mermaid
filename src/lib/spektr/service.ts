@@ -12,7 +12,7 @@ const DEFAULT_SPEKTR_ERROR_MESSAGE = "SPEKTR no pudo completar la solicitud.";
 
 const getFallbackErrorMessage = (status: number) => {
   if (status === 500) {
-    return "Error de configuración (v2). Revisa las variables en Vercel.";
+    return "SPEKTR no está configurado correctamente en el servidor.";
   }
 
   if (status === 502) {

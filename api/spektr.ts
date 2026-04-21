@@ -1,6 +1,7 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 
-const DEFAULT_SPEKTR_MODEL = "gemini-1.5-flash";
+const DEFAULT_SPEKTR_MODEL = "gemini-1.5-flash"; // Intentaremos este primero
+const FALLBACK_MODEL = "gemini-1.5-flash-latest";
 
 const getEnv = () => {
   return typeof process !== "undefined" ? process.env : {};
@@ -24,7 +25,7 @@ export default async function handler(req: any, res: any) {
   }
 
   const apiKey = getApiKey();
-  const modelName = getModelName();
+  let modelName = getModelName();
 
   if (!apiKey) {
     return res.status(500).json({ 
@@ -36,7 +37,7 @@ export default async function handler(req: any, res: any) {
     const { mode, prompt, currentCode, diagramType } = req.body || {};
 
     const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: modelName });
+    let model = genAI.getGenerativeModel({ model: modelName });
 
     const fullPrompt = `
       Actúa como SPEKTR, experto en diagramas y arquitectura.
@@ -54,7 +55,18 @@ export default async function handler(req: any, res: any) {
       3. No uses explicaciones innecesarias.
     `;
 
-    const result = await model.generateContent(fullPrompt);
+    let result;
+    try {
+      result = await model.generateContent(fullPrompt);
+    } catch (modelError: any) {
+      // Si el modelo falla por no encontrarse (404), intentamos con el último disponible
+      if (modelError.message?.includes("404") || modelError.message?.includes("not found")) {
+        model = genAI.getGenerativeModel({ model: FALLBACK_MODEL });
+        result = await model.generateContent(fullPrompt);
+      } else {
+        throw modelError;
+      }
+    }
     const response = await result.response;
     const text = response.text().trim();
 
