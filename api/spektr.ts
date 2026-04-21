@@ -33,6 +33,9 @@ export default async function handler(req: any, res: any) {
     });
   }
 
+  // Debug parcial de llave para confirmar actualización en Vercel
+  const keyDebug = `${apiKey.substring(0, 6)}...${apiKey.substring(apiKey.length - 4)}`;
+
   try {
     const { mode, prompt, currentCode, diagramType } = req.body || {};
 
@@ -97,7 +100,7 @@ export default async function handler(req: any, res: any) {
   } catch (error: any) {
     console.error("Gemini Error:", error);
     return res.status(500).json({ 
-      error: `Error de SPEKTR: ${error.message || 'Error desconocido'}` 
+      error: `Error de SPEKTR (Key: ${keyDebug}): ${error.message || 'Error desconocido'}` 
     });
   }
 }
